@@ -32,7 +32,10 @@ jobs:
           java-version: 17
 
       - name: Confirm Java version
-        run: java -version
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+          which java
+          java -version
 
       - name: Install dependencies
         run: npm ci
@@ -51,18 +54,34 @@ jobs:
           print('Patched signingConfig to debug (if needed).')
           PY
 
+      - name: Pin Gradle runtime JDK to Java 17
+        run: |
+          echo "org.gradle.java.home=$JAVA_HOME" >> android/gradle.properties
+          tail -n 5 android/gradle.properties
+
       - name: Build release APK (bundled JS, no Metro required)
+        id: build_release
+        continue-on-error: true
         working-directory: android
         run: |
-          java -version
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew :app:assembleRelease -x lint -x test --stacktrace
+          ./gradlew :app:assembleRelease -x lint -x test --stacktrace --console=plain 2>&1 | tee ../gradle-build.log
+
+      - name: Upload Gradle build log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
 
       - name: Upload release APK artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: ytlearn-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: ignore
 
       - name: Upload unsigned release APK fallback
         if: ${{ always() }}
@@ -71,3 +90,9 @@ jobs:
           name: ytlearn-release-apk-unsigned
           path: android/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: ignore
+
+      - name: Fail workflow if Gradle build failed
+        if: ${{ steps.build_release.outcome != 'success' }}
+        run: |
+          echo "Gradle build failed. Please download gradle-build-log artifact for exact stacktrace."
+          exit 1
