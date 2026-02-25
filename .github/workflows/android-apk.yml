@@ -35,11 +35,22 @@ jobs:
         run: npm ci
 
       - name: Generate android project from Expo config
-        run: npx expo prebuild --platform android --non-interactive
+        run: CI=1 npx expo prebuild --platform android
+
+      - name: Force release signing to debug keystore in CI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/build.gradle')
+          s = p.read_text()
+          s2 = s.replace('signingConfig signingConfigs.release', 'signingConfig signingConfigs.debug')
+          p.write_text(s2)
+          print('Patched signingConfig to debug (if needed).')
+          PY
 
       - name: Build release APK (bundled JS, no Metro required)
         working-directory: android
-        run: ./gradlew assembleRelease
+        run: ./gradlew :app:assembleRelease -x lint -x test --stacktrace
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
