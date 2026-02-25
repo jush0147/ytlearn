@@ -1,6 +1,6 @@
 import { SubtitleCue } from '../types/subtitle';
 
-const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+const INNERTUBE_PLAYER_URL = 'https://www.youtube.com/youtubei/v1/player';
 
 export class SubtitleNotAvailableError extends Error {
   constructor(message = 'No subtitles available') {
@@ -72,6 +72,8 @@ export const fetchSubtitlesFromInnertube = async (videoId: string): Promise<Subt
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-YouTube-Client-Name': '3',
+      'X-YouTube-Client-Version': '19.09.37',
     },
     body: JSON.stringify({
       context: {
