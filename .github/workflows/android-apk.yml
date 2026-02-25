@@ -37,12 +37,20 @@ jobs:
       - name: Generate android project from Expo config
         run: npx expo prebuild --platform android --non-interactive
 
-      - name: Build debug APK
+      - name: Build release APK (bundled JS, no Metro required)
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleRelease
 
-      - name: Upload APK artifact
+      - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ytlearn-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: ytlearn-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload unsigned release APK fallback
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ytlearn-release-apk-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: ignore
