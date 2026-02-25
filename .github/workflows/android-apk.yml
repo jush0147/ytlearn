@@ -26,7 +26,6 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Setup Java 17
-        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -54,11 +53,9 @@ jobs:
 
       - name: Build release APK (bundled JS, no Metro required)
         working-directory: android
-        env:
-          JAVA_HOME: ${{ steps.setup-java.outputs.path }}
-          PATH: ${{ steps.setup-java.outputs.path }}/bin:${{ env.PATH }}
         run: |
           java -version
+          chmod +x gradlew
           ./gradlew :app:assembleRelease -x lint -x test --stacktrace
 
       - name: Upload release APK artifact
