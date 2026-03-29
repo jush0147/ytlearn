@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    overscroll-behavior-y: contain;
+  }
+
+  /* Hide scrollbar but keep functionality */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/80 dark:bg-slate-800/80 backdrop-blur-xl border border-white/20 dark:border-slate-700/50 rounded-2xl shadow-lg;
+  }
+
+  .glass-card-solid {
+    @apply bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2.5 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white font-medium rounded-xl shadow-md shadow-brand-500/25 active:scale-[0.97] transition-all duration-200;
+  }
+
+  .btn-ghost {
+    @apply px-4 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium rounded-xl active:scale-[0.97] transition-all duration-200;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500 transition-all duration-200 placeholder:text-slate-400 dark:placeholder:text-slate-600;
+  }
+
+  .subtitle-line {
+    @apply px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-800/50;
+  }
+
+  .subtitle-line-active {
+    @apply bg-brand-50 dark:bg-brand-950/50 border-l-4 border-brand-500;
+  }
+
+  .word-unmarked {
+    @apply text-slate-500 dark:text-slate-400;
+  }
+
+  .word-learning {
+    @apply text-amber-500 dark:text-amber-400 underline decoration-amber-400/50 decoration-2 underline-offset-2 font-medium;
+  }
+
+  .word-mastered {
+    @apply text-slate-400/60 dark:text-slate-600;
+  }
+
+  .bottom-sheet-overlay {
+    @apply fixed inset-0 bg-black/40 backdrop-blur-sm z-40;
+  }
+
+  .bottom-sheet {
+    @apply fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-slate-900 rounded-t-3xl shadow-2xl max-h-[85vh] overflow-y-auto;
+  }
+
+  .score-ring {
+    @apply relative inline-flex items-center justify-center;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .shimmer-bg {
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.08) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+  }
+}
