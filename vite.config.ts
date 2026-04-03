@@ -96,6 +96,78 @@ function parseXml(xml: string) {
     return segments;
 }
 
+async function fetchCaptionsViaInnertube(videoId: string, lang: string) {
+    try {
+        const body = JSON.stringify({
+            context: {
+                client: {
+                    clientName: 'ANDROID',
+                    clientVersion: '20.10.38',
+                    androidSdkVersion: 34,
+                    hl: lang,
+                    gl: 'US',
+                },
+            },
+            videoId,
+        });
+
+        const playerData = await postUrl(
+            'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+            body,
+            {
+                'Content-Type': 'application/json',
+                'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)',
+            }
+        );
+
+        const parsed = JSON.parse(playerData);
+        return parsed.captions?.playerCaptionsTracklistRenderer?.captionTracks || null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchCaptionsViaWebScrape(videoId: string, lang: string) {
+    try {
+        const html = await fetchUrl(`https://www.youtube.com/watch?v=${videoId}`);
+
+        // Method 1: balanced-brace extraction of ytInitialPlayerResponse
+        const marker = 'var ytInitialPlayerResponse = ';
+        const idx = html.indexOf(marker);
+        if (idx !== -1) {
+            const start = idx + marker.length;
+            let depth = 0;
+            for (let i = start; i < html.length; i++) {
+                if (html[i] === '{') depth++;
+                else if (html[i] === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        try {
+                            const data = JSON.parse(html.slice(start, i + 1));
+                            const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+                            if (tracks?.length) return tracks;
+                        } catch { /* ignore */ }
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Method 2: regex for captionTracks
+        const match = html.match(/"captionTracks":(\[.*?\])/);
+        if (match) {
+            try {
+                const tracks = JSON.parse(match[1]);
+                if (tracks.length > 0) return tracks;
+            } catch { /* ignore */ }
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+
 function apiDevPlugin(): Plugin {
     return {
         name: 'api-dev-plugin',
@@ -115,35 +187,17 @@ function apiDevPlugin(): Plugin {
                 }
 
                 try {
-                    console.log('[API] Fetching from Innertube for videoId:', videoId);
+                    // Strategy 1: Innertube ANDROID API
+                    console.log('[API] Trying Innertube for videoId:', videoId);
+                    let captions = await fetchCaptionsViaInnertube(videoId, lang);
 
-                    const body = JSON.stringify({
-                        context: {
-                            client: {
-                                clientName: 'ANDROID',
-                                clientVersion: '20.10.38',
-                                androidSdkVersion: 34,
-                                hl: lang,
-                                gl: 'US',
-                            },
-                        },
-                        videoId,
-                    });
+                    // Strategy 2: Web page scraping fallback
+                    if (!captions || captions.length === 0) {
+                        console.log('[API] Innertube failed, trying web scrape...');
+                        captions = await fetchCaptionsViaWebScrape(videoId, lang);
+                    }
 
-                    const playerData = await postUrl(
-                        'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-                        body,
-                        {
-                            'Content-Type': 'application/json',
-                            'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)',
-                        }
-                    );
-
-                    const parsed = JSON.parse(playerData);
-                    const captions =
-                        parsed.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-
-                    console.log('[API] Found caption tracks:', captions?.length || 0);
+                    console.log('[API] Final caption tracks:', captions?.length || 0);
 
                     if (!captions || captions.length === 0) {
                         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -174,12 +228,7 @@ function apiDevPlugin(): Plugin {
                         fetchSubs(secondaryTrack),
                     ]);
 
-                    console.log(
-                        '[API] Parsed subtitles - primary:',
-                        primary.length,
-                        'secondary:',
-                        secondary.length
-                    );
+                    console.log('[API] Parsed subtitles - primary:', primary.length, 'secondary:', secondary.length);
 
                     res.writeHead(200, {
                         'Content-Type': 'application/json',
