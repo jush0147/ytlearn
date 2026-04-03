@@ -168,6 +168,47 @@ async function fetchCaptionsViaWebScrape(videoId: string, lang: string) {
     }
 }
 
+async function sendProxyRequest(targetUrl: string, method: string, headers: any, bodyData: string | undefined, res: any) {
+    return new Promise<void>((resolve, reject) => {
+        const parsed = new URL(targetUrl);
+        const mod = targetUrl.startsWith('https') ? https : http;
+        
+        const reqOpts = {
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            method: method,
+            headers: {
+                'Content-Type': headers['content-type'] || 'application/json',
+                'User-Agent': headers['x-custom-ua'] || 'Mozilla/5.0',
+            } as any
+        };
+
+        if (bodyData) {
+            reqOpts.headers['Content-Length'] = Buffer.byteLength(bodyData);
+        }
+
+        const proxyReq = mod.request(reqOpts, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 200, {
+                'Content-Type': proxyRes.headers['content-type'] || 'text/plain',
+                'Access-Control-Allow-Origin': '*',
+            });
+            
+            const chunks: Buffer[] = [];
+            proxyRes.on('data', Buffer.prototype.push.bind(chunks));
+            proxyRes.on('end', () => {
+                res.end(Buffer.concat(chunks));
+                resolve();
+            });
+        });
+
+        proxyReq.on('error', reject);
+        if (bodyData) {
+            proxyReq.write(bodyData);
+        }
+        proxyReq.end();
+    });
+}
+
 function apiDevPlugin(): Plugin {
     return {
         name: 'api-dev-plugin',
@@ -239,6 +280,46 @@ function apiDevPlugin(): Plugin {
                     console.error('[API] Error:', error.message);
                     res.writeHead(500, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({ error: error.message }));
+                }
+            });
+
+            server.middlewares.use('/api/proxy', async (req: any, res: any) => {
+                // Handle local CORS proxy request
+                if (req.method === 'OPTIONS') {
+                    res.writeHead(200, {
+                        'Access-Control-Allow-Origin': '*',
+                        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                        'Access-Control-Allow-Headers': 'Content-Type, X-Custom-UA',
+                    });
+                    res.end();
+                    return;
+                }
+
+                const fullUrl = new URL(req.url || '/', 'http://localhost');
+                const targetUrl = fullUrl.searchParams.get('url');
+
+                if (!targetUrl) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'url is required' }));
+                    return;
+                }
+
+                try {
+                    let bodyData = '';
+                    if (req.method === 'POST') {
+                        const chunks: Buffer[] = [];
+                        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+                        req.on('end', async () => {
+                            bodyData = Buffer.concat(chunks).toString('utf-8');
+                            await sendProxyRequest(targetUrl, req.method, req.headers, bodyData, res);
+                        });
+                        return;
+                    }
+                    await sendProxyRequest(targetUrl, req.method, req.headers, undefined, res);
+                } catch (e: any) {
+                    console.error('[Proxy] Error:', e.message);
+                    res.writeHead(500);
+                    res.end();
                 }
             });
         },
