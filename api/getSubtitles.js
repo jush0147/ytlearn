@@ -1,7 +1,6 @@
 import https from 'https';
 
-const ANDROID_VERSION = '20.10.38';
-const ANDROID_UA = `com.google.android.youtube/${ANDROID_VERSION} (Linux; U; Android 14)`;
+const ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)';
 
 function httpsRequest(method, url, headers = {}, body = null) {
     return new Promise((resolve, reject) => {
@@ -24,123 +23,131 @@ export default async function handler(req, res) {
     const { videoId, lang = 'en' } = req.query || {};
     if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
 
-    // Extract real client IP from request headers (Vercel sets these)
-    const clientIp =
-        req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-        req.headers['x-real-ip'] ||
-        '203.0.113.1'; // fallback to a valid public IP
+    const apiKey = process.env.YOUTUBE_API_KEY;
 
-    console.log(`[getSubtitles] Fetching ${videoId} (${lang}) clientIp=${clientIp}`);
+    console.log(`[getSubtitles] Fetching ${videoId} (${lang}), hasApiKey=${!!apiKey}`);
 
-    // Try multiple strategies
-    const strategies = [
-        // Strategy 1: Android with client IP forwarded
-        () => fetchViaInnertube(videoId, lang, clientIp, 'ANDROID', ANDROID_VERSION, ANDROID_UA),
-        // Strategy 2: Android without IP forwarding (may work on some Vercel regions)
-        () => fetchViaInnertube(videoId, lang, null, 'ANDROID', ANDROID_VERSION, ANDROID_UA),
-        // Strategy 3: TV embedded player (sometimes less restricted)
-        () => fetchViaInnertube(videoId, lang, clientIp, 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', '2.0',
-            'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/6.0 TV Safari/538.1'),
-    ];
+    try {
+        let tracks = null;
 
-    for (let i = 0; i < strategies.length; i++) {
-        try {
-            const result = await strategies[i]();
-            if (result) {
-                console.log(`[getSubtitles] Strategy ${i + 1} succeeded`);
-                return res.status(200).json(result);
-            }
-        } catch (e) {
-            console.warn(`[getSubtitles] Strategy ${i + 1} failed: ${e.message}`);
+        // Strategy 1: Use YOUTUBE_API_KEY to get caption list via official API
+        if (apiKey) {
+            tracks = await fetchViaOfficialApi(videoId, lang, apiKey);
         }
-    }
 
-    console.warn('[getSubtitles] All strategies failed');
-    return res.status(200).json({ primary: [], secondary: [] });
+        // Strategy 2: Fallback - Innertube ANDROID (works on non-Vercel IPs)
+        if (!tracks?.length) {
+            tracks = await fetchViaInnertube(videoId, lang);
+        }
+
+        if (!tracks?.length) {
+            console.log(`[getSubtitles] No tracks found`);
+            return res.status(200).json({ primary: [], secondary: [] });
+        }
+
+        console.log(`[getSubtitles] Found ${tracks.length} tracks`);
+
+        const primaryTrack = tracks.find(t => t.languageCode === lang) ||
+            tracks.find(t => t.languageCode.startsWith('en')) || tracks[0];
+        const secondaryLang = lang.startsWith('en') ? 'zh' : 'en';
+        const secondaryTrack = tracks.find(t => t.languageCode.startsWith(secondaryLang));
+
+        const fetchXml = async (track) => {
+            if (!track) return [];
+            try {
+                const xmlRes = await httpsRequest('GET', track.baseUrl + '&fmt=srv3', {
+                    'User-Agent': ANDROID_UA
+                });
+                if (!xmlRes.body || xmlRes.body.length < 10) return [];
+                return parseXml(xmlRes.body);
+            } catch { return []; }
+        };
+
+        const [primary, secondary] = await Promise.all([
+            fetchXml(primaryTrack),
+            fetchXml(secondaryTrack),
+        ]);
+
+        console.log(`[getSubtitles] primary=${primary.length} secondary=${secondary.length}`);
+        return res.status(200).json({ primary, secondary });
+
+    } catch (e) {
+        console.error('[getSubtitles] Error:', e.message);
+        return res.status(500).json({ error: e.message });
+    }
 }
 
-async function fetchViaInnertube(videoId, lang, clientIp, clientName, clientVersion, ua) {
-    const body = JSON.stringify({
-        context: {
-            client: {
-                clientName,
-                clientVersion,
-                ...(clientName === 'ANDROID' ? { androidSdkVersion: 34 } : {}),
-                hl: lang,
-                gl: 'US',
-            },
-        },
-        videoId,
-    });
+/**
+ * Use official YouTube Data API v3 to get captions list.
+ * The API gives us caption IDs but NOT direct download URLs.
+ * However, we can construct the timedtext URL from the video ID and language.
+ */
+async function fetchViaOfficialApi(videoId, lang, apiKey) {
+    try {
+        // Step 1: List available captions via official API
+        const url = `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`;
+        const res = await httpsRequest('GET', url, {
+            'Accept': 'application/json'
+        });
 
-    const headers = {
-        'Content-Type': 'application/json',
-        'User-Agent': ua,
-    };
-    if (clientIp) {
-        headers['X-Forwarded-For'] = clientIp;
-    }
+        if (res.status !== 200) {
+            console.log(`[getSubtitles] Official API returned ${res.status}`);
+            return null;
+        }
 
-    const apiRes = await httpsRequest(
-        'POST',
-        'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-        headers,
-        body
-    );
+        const data = JSON.parse(res.body);
+        const items = data.items || [];
 
-    const data = JSON.parse(apiRes.body);
-    const playStatus = data.playabilityStatus?.status;
+        if (!items.length) {
+            console.log(`[getSubtitles] Official API: no captions found`);
+            return null;
+        }
 
-    if (playStatus === 'LOGIN_REQUIRED' || playStatus === 'ERROR') {
-        console.log(`[getSubtitles] ${clientName} got ${playStatus}`);
+        console.log(`[getSubtitles] Official API: found ${items.length} caption tracks`);
+
+        // Step 2: Use Innertube to get actual signed baseUrls for these tracks
+        // (Official API only gives IDs, not download URLs)
+        const innerTracks = await fetchViaInnertube(videoId, lang);
+        if (innerTracks?.length) return innerTracks;
+
+        // If Innertube is blocked, construct basic timedtext URLs
+        // These work without signing for some videos
+        return items.map(item => ({
+            languageCode: item.snippet.language,
+            baseUrl: `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${item.snippet.language}&kind=${item.snippet.trackKind === 'asr' ? 'asr' : ''}`,
+            name: { simpleText: item.snippet.name || item.snippet.language },
+            kind: item.snippet.trackKind === 'asr' ? 'asr' : undefined,
+        }));
+
+    } catch (e) {
+        console.warn('[getSubtitles] Official API failed:', e.message);
         return null;
     }
+}
 
-    const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (!tracks?.length) {
-        console.log(`[getSubtitles] ${clientName}: no tracks, status=${playStatus}`);
-        return null;
-    }
-
-    console.log(`[getSubtitles] ${clientName}: found ${tracks.length} tracks`);
-
-    const primaryTrack =
-        tracks.find(t => t.languageCode === lang) ||
-        tracks.find(t => t.languageCode.startsWith('en')) ||
-        tracks[0];
-
-    const secondaryLang = lang.startsWith('en') ? 'zh' : 'en';
-    const secondaryTrack = tracks.find(t => t.languageCode.startsWith(secondaryLang));
-
-    const fetchXml = async (track) => {
-        if (!track) return [];
-        try {
-            const xmlRes = await httpsRequest('GET', track.baseUrl + '&fmt=srv3', { 'User-Agent': ANDROID_UA });
-            if (!xmlRes.body || xmlRes.body.length < 10) return [];
-            return parseXml(xmlRes.body);
-        } catch { return []; }
-    };
-
-    const [primary, secondary] = await Promise.all([
-        fetchXml(primaryTrack),
-        fetchXml(secondaryTrack),
-    ]);
-
-    console.log(`[getSubtitles] primary=${primary.length} secondary=${secondary.length}`);
-    return { primary, secondary };
+async function fetchViaInnertube(videoId, lang) {
+    try {
+        const body = JSON.stringify({
+            context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38', androidSdkVersion: 34, hl: lang, gl: 'US' } },
+            videoId
+        });
+        const res = await httpsRequest('POST', 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+            { 'Content-Type': 'application/json', 'User-Agent': ANDROID_UA }, body);
+        const data = JSON.parse(res.body);
+        if (data.playabilityStatus?.status === 'LOGIN_REQUIRED') return null;
+        return data.captions?.playerCaptionsTracklistRenderer?.captionTracks || null;
+    } catch { return null; }
 }
 
 function parseXml(xml) {
     const segments = [];
     let match;
-
     const pRegex = /<p[^>]*\bt="(\d+)"[^>]*\bd="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
     while ((match = pRegex.exec(xml)) !== null) {
         const text = decodeEntities(match[3]);
         if (text) segments.push({ start: parseInt(match[1]) / 1000, dur: parseInt(match[2]) / 1000, text });
     }
     if (segments.length > 0) return segments;
-
     const textRegex = /<text[^>]*\bstart="([\d.]+)"[^>]*\bdur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/g;
     while ((match = textRegex.exec(xml)) !== null) {
         const text = decodeEntities(match[3]);
