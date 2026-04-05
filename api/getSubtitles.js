@@ -1,36 +1,10 @@
 import https from 'https';
 
-async function fetchUrl(url, headers = {}) {
-    return new Promise((resolve, reject) => {
-        https.get(url, { headers }, (res) => {
-            const chunks = [];
-            res.on('data', (d) => chunks.push(d));
-            res.on('end', () => resolve(Buffer.concat(chunks).toString()));
-        }).on('error', reject);
-    });
-}
-
-function parseTranscript(xml) {
-    const segments = [];
-    const regex = /<text start="([\d.]+)" dur="([\d.]+)">(.*?)<\/text>/g;
-    let match;
-    while ((match = regex.exec(xml)) !== null) {
-        let text = match[3]
-            .replace(/&amp;/g, '&')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&quot;/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&apos;/g, "'");
-        segments.push({
-            start: parseFloat(match[1]),
-            duration: parseFloat(match[2]),
-            text
-        });
-    }
-    return segments;
-}
-
+/**
+ * This endpoint ONLY returns caption track metadata (baseUrl).
+ * The client browser will then fetch the actual XML directly,
+ * bypassing the server-IP vs youtube-signature mismatch.
+ */
 export default async function handler(req, res) {
     const { videoId, lang = 'en' } = req.query || {};
     if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
@@ -38,32 +12,43 @@ export default async function handler(req, res) {
     console.log(`[getSubtitles] Fetching ${videoId} (${lang})`);
 
     try {
-        const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        const html = await fetchUrl(watchUrl, {
+        const html = await httpsGet(`https://www.youtube.com/watch?v=${videoId}`, {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9'
+            'Accept-Language': 'en-US,en;q=0.9',
         });
 
         const match = html.match(/"captionTracks":(\[.*?\])/);
         if (!match) {
-            return res.status(404).json({ error: 'No caption tracks found in HTML' });
+            console.log('[getSubtitles] No captionTracks found in HTML');
+            return res.status(200).json({ tracks: [] });
         }
 
         const tracks = JSON.parse(match[1]);
-        const track = tracks.find(t => t.languageCode === lang) || tracks[0];
-        
-        console.log(`[getSubtitles] Using track: ${track.languageCode} (${track.kind || 'manual'})`);
-        
-        const xml = await fetchUrl(track.baseUrl + '&fmt=srv3');
-        if (!xml || xml.length < 10) {
-            return res.status(403).json({ error: 'YouTube returned empty captions for this IP' });
-        }
+        console.log(`[getSubtitles] Found ${tracks.length} tracks`);
 
-        const segments = parseTranscript(xml);
-        return res.status(200).json(segments);
-
+        // Return tracks with baseUrl so client can fetch XML directly (bypasses server IP block)
+        return res.status(200).json({ tracks });
     } catch (e) {
         console.error('[getSubtitles] Error:', e.message);
         return res.status(500).json({ error: e.message });
     }
+}
+
+function httpsGet(url, headers) {
+    return new Promise((resolve, reject) => {
+        const opts = {
+            hostname: 'www.youtube.com',
+            path: url.replace('https://www.youtube.com', ''),
+            method: 'GET',
+            headers,
+        };
+        const req = https.request(opts, (res) => {
+            const chunks = [];
+            res.on('data', d => chunks.push(d));
+            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')); });
+        req.end();
+    });
 }
