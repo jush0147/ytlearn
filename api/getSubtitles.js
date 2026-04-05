@@ -1,10 +1,29 @@
 import https from 'https';
 
-/**
- * This endpoint ONLY returns caption track metadata (baseUrl).
- * The client browser will then fetch the actual XML directly,
- * bypassing the server-IP vs youtube-signature mismatch.
- */
+const ANDROID_UA = 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)';
+
+function httpsRequest(method, url, headers = {}, body = null) {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const opts = {
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            method,
+            headers,
+        };
+        if (body) opts.headers['Content-Length'] = Buffer.byteLength(body);
+        const req = https.request(opts, (res) => {
+            const chunks = [];
+            res.on('data', d => chunks.push(d));
+            res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') }));
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')); });
+        if (body) req.write(body);
+        req.end();
+    });
+}
+
 export default async function handler(req, res) {
     const { videoId, lang = 'en' } = req.query || {};
     if (!videoId) return res.status(400).json({ error: 'Missing videoId' });
@@ -12,43 +31,111 @@ export default async function handler(req, res) {
     console.log(`[getSubtitles] Fetching ${videoId} (${lang})`);
 
     try {
-        const html = await httpsGet(`https://www.youtube.com/watch?v=${videoId}`, {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
+        // Step 1: Get caption tracks via Innertube ANDROID
+        const body = JSON.stringify({
+            context: {
+                client: {
+                    clientName: 'ANDROID',
+                    clientVersion: '20.10.38',
+                    androidSdkVersion: 34,
+                    hl: lang,
+                    gl: 'US',
+                },
+            },
+            videoId,
         });
 
-        const match = html.match(/"captionTracks":(\[.*?\])/);
-        if (!match) {
-            console.log('[getSubtitles] No captionTracks found in HTML');
-            return res.status(200).json({ tracks: [] });
+        const apiRes = await httpsRequest(
+            'POST',
+            'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+            { 'Content-Type': 'application/json', 'User-Agent': ANDROID_UA },
+            body
+        );
+
+        const data = JSON.parse(apiRes.body);
+        const tracks = data.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+
+        if (!tracks?.length) {
+            console.log(`[getSubtitles] No tracks: ${data.playabilityStatus?.status}`);
+            return res.status(200).json({ primary: [], secondary: [] });
         }
 
-        const tracks = JSON.parse(match[1]);
         console.log(`[getSubtitles] Found ${tracks.length} tracks`);
 
-        // Return tracks with baseUrl so client can fetch XML directly (bypasses server IP block)
-        return res.status(200).json({ tracks });
+        // Step 2: Pick tracks
+        const primaryTrack =
+            tracks.find(t => t.languageCode === lang) ||
+            tracks.find(t => t.languageCode.startsWith('en')) ||
+            tracks[0];
+
+        const secondaryLang = lang.startsWith('en') ? 'zh' : 'en';
+        const secondaryTrack = tracks.find(t => t.languageCode.startsWith(secondaryLang));
+
+        // Step 3: Fetch XML using Android UA (this makes YouTube return proper content)
+        const fetchXml = async (track) => {
+            if (!track) return [];
+            try {
+                const url = track.baseUrl + '&fmt=srv3';
+                const xmlRes = await httpsRequest('GET', url, { 'User-Agent': ANDROID_UA });
+                if (!xmlRes.body || xmlRes.body.length < 10) return [];
+                return parseXml(xmlRes.body);
+            } catch (e) {
+                console.error('[getSubtitles] XML fetch error:', e.message);
+                return [];
+            }
+        };
+
+        const [primary, secondary] = await Promise.all([
+            fetchXml(primaryTrack),
+            fetchXml(secondaryTrack),
+        ]);
+
+        console.log(`[getSubtitles] primary: ${primary.length}, secondary: ${secondary.length}`);
+        return res.status(200).json({ primary, secondary });
+
     } catch (e) {
         console.error('[getSubtitles] Error:', e.message);
         return res.status(500).json({ error: e.message });
     }
 }
 
-function httpsGet(url, headers) {
-    return new Promise((resolve, reject) => {
-        const opts = {
-            hostname: 'www.youtube.com',
-            path: url.replace('https://www.youtube.com', ''),
-            method: 'GET',
-            headers,
-        };
-        const req = https.request(opts, (res) => {
-            const chunks = [];
-            res.on('data', d => chunks.push(d));
-            res.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')));
-        });
-        req.on('error', reject);
-        req.setTimeout(15000, () => { req.destroy(); reject(new Error('timeout')); });
-        req.end();
-    });
+function parseXml(xml) {
+    const segments = [];
+    let match;
+
+    // srv3: <p t="ms" d="ms">...</p>
+    const pRegex = /<p[^>]*\bt="(\d+)"[^>]*\bd="(\d+)"[^>]*>([\s\S]*?)<\/p>/g;
+    while ((match = pRegex.exec(xml)) !== null) {
+        const start = parseInt(match[1]) / 1000;
+        const dur = parseInt(match[2]) / 1000;
+        const text = decodeEntities(match[3]);
+        if (text) segments.push({ start, dur, text });
+    }
+
+    if (segments.length > 0) return segments;
+
+    // timedtext fallback: <text start="s" dur="s">...</text>
+    const textRegex = /<text[^>]*\bstart="([\d.]+)"[^>]*\bdur="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/g;
+    while ((match = textRegex.exec(xml)) !== null) {
+        const start = parseFloat(match[1]);
+        const dur = parseFloat(match[2]);
+        const text = decodeEntities(match[3]);
+        if (text) segments.push({ start, dur, text });
+    }
+
+    return segments;
+}
+
+function decodeEntities(str) {
+    return str
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, c) => String.fromCodePoint(parseInt(c, 16)))
+        .replace(/&#(\d+);/g, (_, c) => String.fromCodePoint(parseInt(c, 10)))
+        .replace(/\n/g, ' ')
+        .trim();
 }
