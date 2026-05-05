@@ -1,98 +1,20 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-@layer base {
-  * {
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  html {
-    scroll-behavior: smooth;
-  }
-
-  body {
-    @apply bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100;
-    transition: background-color 0.3s ease, color 0.3s ease;
-    overscroll-behavior-y: contain;
-  }
-
-  /* Hide scrollbar but keep functionality */
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
-}
-
-@layer components {
-  .glass-card {
-    @apply bg-white/80 dark:bg-slate-800/80 backdrop-blur-xl border border-white/20 dark:border-slate-700/50 rounded-2xl shadow-lg;
-  }
-
-  .glass-card-solid {
-    @apply bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl shadow-lg;
-  }
-
-  .btn-primary {
-    @apply px-4 py-2.5 bg-gradient-to-r from-brand-500 to-brand-600 hover:from-brand-600 hover:to-brand-700 text-white font-medium rounded-xl shadow-md shadow-brand-500/25 active:scale-[0.97] transition-all duration-200;
-  }
-
-  .btn-ghost {
-    @apply px-4 py-2.5 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium rounded-xl active:scale-[0.97] transition-all duration-200;
-  }
-
-  .input-field {
-    @apply w-full px-4 py-3 bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500 transition-all duration-200 placeholder:text-slate-400 dark:placeholder:text-slate-600;
-  }
-
-  .subtitle-line {
-    @apply px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 hover:bg-slate-100 dark:hover:bg-slate-800/50;
-  }
-
-  .subtitle-line-active {
-    @apply bg-brand-50 dark:bg-brand-950/50 border-l-4 border-brand-500;
-  }
-
-  .word-unmarked {
-    @apply text-slate-500 dark:text-slate-400;
-  }
-
-  .word-learning {
-    @apply text-amber-500 dark:text-amber-400 underline decoration-amber-400/50 decoration-2 underline-offset-2 font-medium;
-  }
-
-  .word-mastered {
-    @apply text-slate-400/60 dark:text-slate-600;
-  }
-
-  .bottom-sheet-overlay {
-    @apply fixed inset-0 bg-black/40 backdrop-blur-sm z-40;
-  }
-
-  .bottom-sheet {
-    @apply fixed bottom-0 left-0 right-0 z-50 bg-white dark:bg-slate-900 rounded-t-3xl shadow-2xl max-h-[85vh] overflow-y-auto;
-  }
-
-  .score-ring {
-    @apply relative inline-flex items-center justify-center;
-  }
-}
-
-@layer utilities {
-  .safe-bottom {
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-  }
-
-  .shimmer-bg {
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255, 255, 255, 0.08) 50%,
-      transparent 100%
-    );
-    background-size: 200% 100%;
-  }
-}
+:root { font-family: Inter, Arial, sans-serif; color: #0f172a; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #f8fafc; }
+.app { max-width: 768px; margin: 0 auto; min-height: 100vh; background: #fff; }
+.container { padding: 12px; }
+input, select, button { font: inherit; }
+input, select { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+button { padding: 10px 12px; border: none; border-radius: 8px; cursor: pointer; }
+.primary { background: #0ea5e9; color: #fff; }
+.error { color: #b91c1c; font-size: 14px; }
+.caption-list { height: 60vh; overflow: auto; border-top: 1px solid #e2e8f0; }
+.caption-item { padding: 10px; border-bottom: 1px solid #f1f5f9; }
+.caption-item.active { background: #e0f2fe; }
+.translation { color: #475569; font-size: 14px; margin-top: 4px; }
+.player-wrap { height: 40vh; background: #0f172a; }
+.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: flex-end; }
+.sheet-card { width: 100%; background: #fff; padding: 16px; border-radius: 16px 16px 0 0; }
+.word-learning { text-decoration: underline; color: #0369a1; }
+.word-known { text-decoration: line-through; opacity: .5; }
+.row { display: flex; gap: 8px; }
